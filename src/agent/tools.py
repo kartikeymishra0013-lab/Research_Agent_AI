@@ -1,13 +1,17 @@
 """
 GPT-4o function-calling tool definitions for the Document Intelligence Agent.
 
-Each tool is defined as an OpenAI function schema and has a corresponding
-Python implementation that the agent can invoke.
+Enhancements over baseline:
+  - evaluate_extraction tool — GPT-4o rates confidence of extracted fields
+  - CostTracker integrated into all tool handlers
+  - Summary handler uses retry
 """
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Optional
+
+from src.utils.retry import with_retry
 
 # ─── Tool Schemas (passed to OpenAI API) ──────────────────────────────────────
 
@@ -138,6 +142,31 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "evaluate_extraction",
+            "description": (
+                "Score the quality and confidence of a previous extraction result. "
+                "Returns a per-field confidence score (0–1) and an overall quality verdict. "
+                "Call this after extract_structured_data to validate key fields."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source_text": {
+                        "type": "string",
+                        "description": "The original source text that was extracted from.",
+                    },
+                    "extracted_data": {
+                        "type": "object",
+                        "description": "The JSON object returned by extract_structured_data.",
+                    },
+                },
+                "required": ["source_text", "extracted_data"],
+            },
+        },
+    },
 ]
 
 
@@ -148,6 +177,14 @@ class ToolExecutor:
     Executes agent tool calls by routing to the appropriate handler.
 
     Each handler receives the parsed arguments and returns a JSON-serializable result.
+
+    Args:
+        schema_extractor       : SchemaExtractor instance (optional).
+        relationship_extractor : RelationshipExtractor instance (optional).
+        chroma_store           : ChromaStore instance (optional).
+        neo4j_store            : Neo4jStore instance (optional).
+        openai_client          : Initialized OpenAI client (optional).
+        cost_tracker           : CostTracker for recording API costs (optional).
     """
 
     def __init__(
@@ -157,20 +194,22 @@ class ToolExecutor:
         chroma_store=None,
         neo4j_store=None,
         openai_client=None,
+        cost_tracker=None,
     ):
         self.schema_extractor = schema_extractor
         self.relationship_extractor = relationship_extractor
         self.chroma_store = chroma_store
         self.neo4j_store = neo4j_store
         self.openai_client = openai_client
+        self.cost_tracker = cost_tracker
 
-        # Dispatch table
         self._handlers = {
-            "extract_structured_data": self._handle_extract_structured,
-            "embed_and_store_chunks": self._handle_embed_store,
+            "extract_structured_data":        self._handle_extract_structured,
+            "embed_and_store_chunks":         self._handle_embed_store,
             "extract_and_store_knowledge_graph": self._handle_graph,
-            "generate_summary": self._handle_summary,
-            "semantic_search": self._handle_search,
+            "generate_summary":               self._handle_summary,
+            "semantic_search":                self._handle_search,
+            "evaluate_extraction":            self._handle_evaluate,
         }
 
     def execute(self, tool_name: str, arguments: dict) -> dict:
@@ -183,13 +222,20 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e), "tool": tool_name}
 
+    # ─── Handlers ─────────────────────────────────────────────────────────────
+
     def _handle_extract_structured(self, text: str, schema_type: str = "default") -> dict:
         if not self.schema_extractor:
             return {"error": "SchemaExtractor not initialized"}
         self.schema_extractor.schema_type = schema_type
         self.schema_extractor.schema = self.schema_extractor._load_schema(schema_type)
         extracted = self.schema_extractor.extract(text)
-        return {"status": "ok", "schema_type": schema_type, "extracted_fields": len(extracted), "data": extracted}
+        return {
+            "status": "ok",
+            "schema_type": schema_type,
+            "extracted_fields": len(extracted),
+            "data": extracted,
+        }
 
     def _handle_embed_store(self, chunks: list[str], doc_id: str) -> dict:
         if not self.chroma_store:
@@ -200,29 +246,36 @@ class ToolExecutor:
             for i, t in enumerate(chunks)
         ]
         count = self.chroma_store.add_chunks(chunk_objs, doc_metadata={"doc_id": doc_id})
-        return {"status": "ok", "chunks_stored": count, "collection": self.chroma_store.collection_name}
+        return {
+            "status": "ok",
+            "chunks_stored": count,
+            "collection": self.chroma_store.collection_name,
+        }
 
     def _handle_graph(self, text: str, doc_id: str) -> dict:
         if not self.relationship_extractor:
             return {"error": "RelationshipExtractor not initialized"}
         graph_data = self.relationship_extractor.extract(text, doc_id=doc_id)
         if self.neo4j_store:
-            summary = self.neo4j_store.store_graph(
+            storage_summary = self.neo4j_store.store_graph(
                 graph_data["entities"], graph_data["relationships"], doc_id=doc_id
             )
         else:
-            summary = {"warning": "Neo4jStore not initialized — graph data extracted but not persisted"}
+            storage_summary = {
+                "warning": "Neo4jStore not initialized — graph data extracted but not persisted"
+            }
         return {
             "status": "ok",
             "entities_extracted": len(graph_data["entities"]),
             "relationships_extracted": len(graph_data["relationships"]),
-            "storage": summary,
+            "storage": storage_summary,
             "graph_data": graph_data,
         }
 
     def _handle_summary(self, text: str, doc_type: str = "") -> dict:
         if not self.openai_client:
             return {"error": "OpenAI client not initialized"}
+
         prompt = f"""Provide a comprehensive structured summary of this {doc_type} document.
 
 Include these sections:
@@ -236,14 +289,29 @@ Include these sections:
 Document text:
 {text[:6000]}"""
 
-        response = self.openai_client.chat.completions.create(
-            model="gpt-4o",
-            temperature=0.3,
-            messages=[
-                {"role": "system", "content": "You are an expert scientific document summarizer. Be concise and precise."},
-                {"role": "user", "content": prompt},
-            ],
-        )
+        @with_retry(max_attempts=3, min_wait=1, max_wait=30)
+        def _call():
+            return self.openai_client.chat.completions.create(
+                model="gpt-4o",
+                temperature=0.3,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert scientific document summarizer. Be concise and precise.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+            )
+
+        response = _call()
+
+        if self.cost_tracker:
+            self.cost_tracker.record(
+                model="gpt-4o",
+                operation="document_summary",
+                usage=response.usage,
+            )
+
         summary = response.choices[0].message.content
         return {"status": "ok", "summary": summary}
 
@@ -252,3 +320,67 @@ Document text:
             return {"error": "ChromaStore not initialized"}
         results = self.chroma_store.search(query, top_k=top_k)
         return {"status": "ok", "query": query, "results": results}
+
+    def _handle_evaluate(self, source_text: str, extracted_data: dict) -> dict:
+        """
+        Score each extracted field for groundedness in the source text.
+        Returns per-field confidence scores and an overall quality verdict.
+        """
+        if not self.openai_client:
+            return {"error": "OpenAI client not initialized"}
+
+        # Strip internal metadata keys from evaluation
+        fields_to_eval = {
+            k: v for k, v in extracted_data.items()
+            if not k.startswith("_") and k not in ("source",)
+        }
+
+        if not fields_to_eval:
+            return {"status": "ok", "confidence": {}, "overall_quality": "no_fields"}
+
+        prompt = f"""You are a quality-assurance agent for document extraction.
+
+Rate each extracted field with a confidence score (0.0–1.0):
+  1.0 = directly and clearly stated in source text
+  0.5 = implied or partially supported
+  0.0 = not found / likely hallucinated
+
+Also provide an "overall_quality" verdict: "high" (avg > 0.7), "medium" (0.4–0.7), or "low" (< 0.4).
+
+Return ONLY a JSON object:
+{{
+  "confidence": {{"field_name": 0.95, ...}},
+  "overall_quality": "high" | "medium" | "low",
+  "low_confidence_fields": ["field_name", ...]
+}}
+
+SOURCE TEXT (first 2000 chars):
+{source_text[:2000]}
+
+EXTRACTED DATA:
+{json.dumps(fields_to_eval, indent=2, default=str)[:3000]}"""
+
+        @with_retry(max_attempts=2, min_wait=1, max_wait=20)
+        def _call():
+            return self.openai_client.chat.completions.create(
+                model="gpt-4o",
+                temperature=0.0,
+                response_format={"type": "json_object"},
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+        response = _call()
+
+        if self.cost_tracker:
+            self.cost_tracker.record(
+                model="gpt-4o",
+                operation="evaluate_extraction",
+                usage=response.usage,
+            )
+
+        try:
+            eval_result = json.loads(response.choices[0].message.content)
+        except json.JSONDecodeError:
+            eval_result = {"confidence": {}, "overall_quality": "unknown"}
+
+        return {"status": "ok", **eval_result}

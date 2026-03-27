@@ -1,14 +1,17 @@
 """
 ChromaDB vector store for semantic search over document chunks.
-Supports embedding, upsert, and similarity search operations.
+
+Enhancements over baseline:
+  - Embedding calls wrapped with embedding_retry (tenacity backoff)
+  - Optional CostTracker integration for recording embedding costs
 """
 from __future__ import annotations
 
 import hashlib
-import uuid
 from typing import Any, Optional
 
 from src.utils.logger import get_logger
+from src.utils.retry import embedding_retry
 
 logger = get_logger(__name__)
 
@@ -18,10 +21,18 @@ class ChromaStore:
     Manages ChromaDB collections for document chunk storage and retrieval.
 
     Supports:
-        - Embedding generation via OpenAI text-embedding-3-small
+        - Embedding generation via OpenAI text-embedding-3-small (with retry)
         - Chunk upsert with metadata
         - Semantic similarity search
         - Collection management (create, delete, list)
+
+    Args:
+        host             : ChromaDB host (default: "chromadb").
+        port             : ChromaDB port (default: 8000).
+        collection_name  : Name of the ChromaDB collection.
+        embedding_model  : OpenAI embedding model name.
+        openai_client    : Initialized OpenAI client for embedding generation.
+        cost_tracker     : Optional CostTracker to record embedding API costs.
     """
 
     def __init__(
@@ -31,12 +42,14 @@ class ChromaStore:
         collection_name: str = "documents",
         embedding_model: str = "text-embedding-3-small",
         openai_client=None,
+        cost_tracker=None,
     ):
         self.host = host
         self.port = port
         self.collection_name = collection_name
         self.embedding_model = embedding_model
         self.openai_client = openai_client
+        self.cost_tracker = cost_tracker
         self._client = None
         self._collection = None
 
@@ -48,7 +61,10 @@ class ChromaStore:
             name=self.collection_name,
             metadata={"hnsw:space": "cosine"},
         )
-        logger.info(f"Connected to ChromaDB at {self.host}:{self.port}, collection={self.collection_name!r}")
+        logger.info(
+            f"Connected to ChromaDB at {self.host}:{self.port}, "
+            f"collection={self.collection_name!r}"
+        )
 
     @property
     def collection(self):
@@ -61,7 +77,7 @@ class ChromaStore:
         Embed and store a list of Chunk objects.
 
         Args:
-            chunks      : List of Chunk objects from TextChunker.
+            chunks      : List of Chunk objects from TextChunker / SemanticChunker.
             doc_metadata: Optional document-level metadata to attach to each chunk.
 
         Returns:
@@ -86,7 +102,11 @@ class ChromaStore:
                 "char_end": chunk.char_end,
                 "token_estimate": chunk.token_estimate,
                 **(doc_metadata or {}),
-                **{k: str(v) for k, v in chunk.metadata.items() if isinstance(v, (str, int, float, bool))},
+                **{
+                    k: str(v)
+                    for k, v in chunk.metadata.items()
+                    if isinstance(v, (str, int, float, bool))
+                },
             }
             ids.append(chunk_id)
             documents.append(chunk.text)
@@ -99,7 +119,9 @@ class ChromaStore:
             metadatas=metadatas,
             embeddings=embeds,
         )
-        logger.info(f"Stored {len(chunks)} chunks in ChromaDB collection {self.collection_name!r}")
+        logger.info(
+            f"Stored {len(chunks)} chunks in ChromaDB collection {self.collection_name!r}"
+        )
         return len(chunks)
 
     def search(
@@ -121,7 +143,7 @@ class ChromaStore:
         """
         query_embedding = self._embed_texts([query])[0]
 
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "query_embeddings": [query_embedding],
             "n_results": top_k,
             "include": ["documents", "metadatas", "distances"],
@@ -142,7 +164,7 @@ class ChromaStore:
                 "text": doc,
                 "metadata": meta,
                 "distance": dist,
-                "score": round(1 - dist, 4),  # cosine similarity score
+                "score": round(1 - dist, 4),  # convert cosine distance → similarity
             })
 
         logger.info(f"Search returned {len(output)} results for query={query!r}")
@@ -153,7 +175,7 @@ class ChromaStore:
         return self.collection.count()
 
     def delete_collection(self):
-        """Delete and recreate the collection (destructive)."""
+        """Delete the collection (destructive)."""
         self._client.delete_collection(self.collection_name)
         self._collection = None
         logger.warning(f"Deleted collection {self.collection_name!r}")
@@ -162,15 +184,29 @@ class ChromaStore:
         """List all collection names in ChromaDB."""
         return [c.name for c in self._client.list_collections()]
 
+    # ─── Internals ────────────────────────────────────────────────────────────
+
     def _embed_texts(self, texts: list[str]) -> list[list[float]]:
-        """Generate embeddings using OpenAI embedding model."""
+        """Generate embeddings using OpenAI, with retry + optional cost tracking."""
         if self.openai_client is None:
             raise RuntimeError("OpenAI client required for embedding generation")
 
-        response = self.openai_client.embeddings.create(
-            model=self.embedding_model,
-            input=texts,
-        )
+        @embedding_retry
+        def _call():
+            return self.openai_client.embeddings.create(
+                model=self.embedding_model,
+                input=texts,
+            )
+
+        response = _call()
+
+        if self.cost_tracker:
+            self.cost_tracker.record(
+                model=self.embedding_model,
+                operation="chroma_embedding",
+                usage=response.usage,
+            )
+
         return [item.embedding for item in response.data]
 
     @staticmethod

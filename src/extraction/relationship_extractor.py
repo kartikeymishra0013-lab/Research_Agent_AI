@@ -1,17 +1,20 @@
 """
 Entity and relationship extractor for knowledge graph construction.
 
-Extracts named entities and typed relationships from text using GPT-4o,
-formatted for direct ingestion into Neo4j.
+Enhancements over baseline:
+  - Retry with exponential backoff via `with_retry`
+  - Cost tracking via CostTracker
+  - Chunk-level provenance (chunk_id injected into properties)
 """
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Optional
 
 from openai import OpenAI
 
 from src.utils.logger import get_logger
+from src.utils.retry import with_retry
 
 logger = get_logger(__name__)
 
@@ -36,6 +39,14 @@ class RelationshipExtractor:
     Returns a dict with:
         - entities: list of {id, label, type, properties}
         - relationships: list of {source, target, type, properties}
+
+    Args:
+        client             : Initialized OpenAI client.
+        model              : OpenAI model (default: gpt-4o).
+        temperature        : Model temperature (default: 0.0).
+        entity_types       : Override the default entity type list.
+        relationship_types : Override the default relationship type list.
+        cost_tracker       : Optional CostTracker for recording API costs.
     """
 
     def __init__(
@@ -45,20 +56,28 @@ class RelationshipExtractor:
         temperature: float = 0.0,
         entity_types: list[str] | None = None,
         relationship_types: list[str] | None = None,
+        cost_tracker=None,
     ):
         self.client = client
         self.model = model
         self.temperature = temperature
         self.entity_types = entity_types or ENTITY_TYPES
         self.relationship_types = relationship_types or RELATIONSHIP_TYPES
+        self.cost_tracker = cost_tracker
 
-    def extract(self, text: str, doc_id: str = "") -> dict[str, list]:
+    def extract(
+        self,
+        text: str,
+        doc_id: str = "",
+        chunk_id: Optional[str] = None,
+    ) -> dict[str, list]:
         """
         Extract entities and relationships from text.
 
         Args:
-            text   : Source text to extract from.
-            doc_id : Optional document identifier for provenance tracking.
+            text     : Source text to extract from.
+            doc_id   : Document identifier for provenance tracking.
+            chunk_id : Optional chunk identifier for fine-grained provenance.
 
         Returns:
             {"entities": [...], "relationships": [...]}
@@ -68,15 +87,26 @@ class RelationshipExtractor:
 
         logger.debug(f"Extracting graph entities from {len(text)} chars")
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            temperature=self.temperature,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": self._system_prompt()},
-                {"role": "user", "content": self._user_prompt(text, doc_id)},
-            ],
-        )
+        @with_retry(max_attempts=3, min_wait=1, max_wait=30)
+        def _call():
+            return self.client.chat.completions.create(
+                model=self.model,
+                temperature=self.temperature,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": self._system_prompt()},
+                    {"role": "user", "content": self._user_prompt(text, doc_id)},
+                ],
+            )
+
+        response = _call()
+
+        if self.cost_tracker:
+            self.cost_tracker.record(
+                model=self.model,
+                operation="relationship_extraction",
+                usage=response.usage,
+            )
 
         raw = response.choices[0].message.content
         try:
@@ -88,15 +118,25 @@ class RelationshipExtractor:
         entities = result.get("entities", [])
         relationships = result.get("relationships", [])
 
-        # Inject doc_id as provenance
-        if doc_id:
-            for e in entities:
-                e.setdefault("properties", {})["doc_id"] = doc_id
-            for r in relationships:
-                r.setdefault("properties", {})["doc_id"] = doc_id
+        # Inject provenance (doc_id + optional chunk_id)
+        for e in entities:
+            props = e.setdefault("properties", {})
+            if doc_id:
+                props["doc_id"] = doc_id
+            if chunk_id:
+                props["chunk_id"] = chunk_id
+
+        for r in relationships:
+            props = r.setdefault("properties", {})
+            if doc_id:
+                props["doc_id"] = doc_id
+            if chunk_id:
+                props["chunk_id"] = chunk_id
 
         logger.info(f"Extracted {len(entities)} entities, {len(relationships)} relationships")
         return {"entities": entities, "relationships": relationships}
+
+    # ─── Prompt builders ──────────────────────────────────────────────────────
 
     def _system_prompt(self) -> str:
         return f"""You are a knowledge graph extraction specialist for scientific documents.
