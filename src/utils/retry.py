@@ -1,35 +1,44 @@
 """
-Retry decorators for OpenAI API calls using tenacity.
-Handles rate limits, connection errors, and transient server errors
-with exponential backoff.
+Retry decorators for OpenAI API calls using Tenacity.
+
+Provides:
+  - with_retry(...)  — configurable decorator factory
+  - openai_retry     — pre-configured for chat/completion calls (4 attempts)
+  - embedding_retry  — pre-configured for embedding calls (3 attempts)
+
+Retried exceptions:
+  openai.RateLimitError, openai.APIConnectionError,
+  openai.APITimeoutError, openai.InternalServerError
 """
 from __future__ import annotations
 
 import logging
 from functools import wraps
-from typing import Callable, Type, Tuple
 
 from tenacity import (
+    before_sleep_log,
     retry,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    before_sleep_log,
-    RetryError,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def _openai_retryable_exceptions() -> Tuple[Type[Exception], ...]:
-    """Return retryable OpenAI exception types (imported lazily)."""
-    from openai import (
-        RateLimitError,
-        APIConnectionError,
-        APITimeoutError,
-        InternalServerError,
-    )
-    return (RateLimitError, APIConnectionError, APITimeoutError, InternalServerError)
+def _openai_retryable_exceptions():
+    """Return the tuple of OpenAI exceptions that should trigger a retry."""
+    try:
+        from openai import (
+            APIConnectionError,
+            APITimeoutError,
+            InternalServerError,
+            RateLimitError,
+        )
+        return (RateLimitError, APIConnectionError, APITimeoutError, InternalServerError)
+    except ImportError:
+        # Fallback: retry on any OSError / ConnectionError so tests still work
+        return (OSError, ConnectionError)
 
 
 def with_retry(
@@ -39,17 +48,22 @@ def with_retry(
     multiplier: float = 2.0,
 ):
     """
-    Decorator that wraps a function with tenacity retry logic.
+    Decorator factory that wraps a callable with tenacity exponential-backoff retry.
 
-    Default behavior: up to 4 attempts, exponential backoff 1s → 2s → 4s → max 60s.
-    Only retries on OpenAI rate-limit, connection, timeout, and server errors.
+    Args:
+        max_attempts : Maximum number of attempts (including the first call).
+        min_wait     : Minimum wait between retries in seconds.
+        max_wait     : Maximum wait between retries in seconds.
+        multiplier   : Exponential backoff multiplier.
 
     Usage:
         @with_retry(max_attempts=3)
-        def call_openai(...):
-            ...
+        def call_api(): ...
+
+        # Or inline:
+        result = with_retry(max_attempts=2)(my_function)()
     """
-    def decorator(func: Callable) -> Callable:
+    def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
             exceptions = _openai_retryable_exceptions()
@@ -64,19 +78,13 @@ def with_retry(
             def _call():
                 return func(*args, **kwargs)
 
-            try:
-                return _call()
-            except RetryError as e:
-                logger.error(f"All {max_attempts} retry attempts exhausted for {func.__name__}: {e}")
-                raise
-            except exceptions as e:
-                logger.error(f"Non-retryable error in {func.__name__}: {e}")
-                raise
+            return _call()
 
         return wrapper
+
     return decorator
 
 
-# Pre-configured variants for convenience
-openai_retry = with_retry(max_attempts=4, min_wait=1, max_wait=60)
-embedding_retry = with_retry(max_attempts=3, min_wait=2, max_wait=30)
+# Pre-configured variants
+openai_retry   = with_retry(max_attempts=4, min_wait=1,  max_wait=60)
+embedding_retry = with_retry(max_attempts=3, min_wait=2,  max_wait=30)

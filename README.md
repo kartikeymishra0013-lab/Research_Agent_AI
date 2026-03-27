@@ -418,4 +418,3 @@ Place documents in `data/input/` — supported formats are `.pdf`, `.docx`, `.do
 
 **Processing a URL fails with timeout**
 Web loader has a 30s timeout by default. Increase it in `config/config.yaml` under `loaders.web.timeout`.
-# Research_Agent_AI

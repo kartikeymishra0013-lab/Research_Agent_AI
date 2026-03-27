@@ -1,23 +1,16 @@
 """
 Entity and relationship extractor for knowledge graph construction.
-
-Enhancements over baseline:
-  - Retry with exponential backoff via `with_retry`
-  - Cost tracking via CostTracker
-  - Chunk-level provenance (chunk_id injected into properties)
+Upgrades: retry, cost tracking, chunk_id provenance.
 """
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
-
-from openai import OpenAI
+from typing import Optional
 
 from src.utils.logger import get_logger
 from src.utils.retry import with_retry
 
 logger = get_logger(__name__)
-
 
 ENTITY_TYPES = [
     "Person", "Organization", "Technology", "Method", "Dataset",
@@ -33,25 +26,9 @@ RELATIONSHIP_TYPES = [
 
 
 class RelationshipExtractor:
-    """
-    Extracts entities and relationships from text for knowledge graph ingestion.
-
-    Returns a dict with:
-        - entities: list of {id, label, type, properties}
-        - relationships: list of {source, target, type, properties}
-
-    Args:
-        client             : Initialized OpenAI client.
-        model              : OpenAI model (default: gpt-4o).
-        temperature        : Model temperature (default: 0.0).
-        entity_types       : Override the default entity type list.
-        relationship_types : Override the default relationship type list.
-        cost_tracker       : Optional CostTracker for recording API costs.
-    """
-
     def __init__(
         self,
-        client: OpenAI,
+        client,
         model: str = "gpt-4o",
         temperature: float = 0.0,
         entity_types: list[str] | None = None,
@@ -65,27 +42,9 @@ class RelationshipExtractor:
         self.relationship_types = relationship_types or RELATIONSHIP_TYPES
         self.cost_tracker = cost_tracker
 
-    def extract(
-        self,
-        text: str,
-        doc_id: str = "",
-        chunk_id: Optional[str] = None,
-    ) -> dict[str, list]:
-        """
-        Extract entities and relationships from text.
-
-        Args:
-            text     : Source text to extract from.
-            doc_id   : Document identifier for provenance tracking.
-            chunk_id : Optional chunk identifier for fine-grained provenance.
-
-        Returns:
-            {"entities": [...], "relationships": [...]}
-        """
+    def extract(self, text: str, doc_id: str = "", chunk_id: Optional[str] = None) -> dict[str, list]:
         if not text.strip():
             return {"entities": [], "relationships": []}
-
-        logger.debug(f"Extracting graph entities from {len(text)} chars")
 
         @with_retry(max_attempts=3, min_wait=1, max_wait=30)
         def _call():
@@ -95,22 +54,16 @@ class RelationshipExtractor:
                 response_format={"type": "json_object"},
                 messages=[
                     {"role": "system", "content": self._system_prompt()},
-                    {"role": "user", "content": self._user_prompt(text, doc_id)},
+                    {"role": "user",   "content": self._user_prompt(text, doc_id)},
                 ],
             )
 
         response = _call()
-
         if self.cost_tracker:
-            self.cost_tracker.record(
-                model=self.model,
-                operation="relationship_extraction",
-                usage=response.usage,
-            )
+            self.cost_tracker.record(self.model, "relationship_extraction", response.usage)
 
-        raw = response.choices[0].message.content
         try:
-            result = json.loads(raw)
+            result = json.loads(response.choices[0].message.content)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse relationship extraction response: {e}")
             return {"entities": [], "relationships": []}
@@ -118,62 +71,33 @@ class RelationshipExtractor:
         entities = result.get("entities", [])
         relationships = result.get("relationships", [])
 
-        # Inject provenance (doc_id + optional chunk_id)
         for e in entities:
             props = e.setdefault("properties", {})
-            if doc_id:
-                props["doc_id"] = doc_id
-            if chunk_id:
-                props["chunk_id"] = chunk_id
-
+            if doc_id:   props["doc_id"]   = doc_id
+            if chunk_id: props["chunk_id"] = chunk_id
         for r in relationships:
             props = r.setdefault("properties", {})
-            if doc_id:
-                props["doc_id"] = doc_id
-            if chunk_id:
-                props["chunk_id"] = chunk_id
+            if doc_id:   props["doc_id"]   = doc_id
+            if chunk_id: props["chunk_id"] = chunk_id
 
         logger.info(f"Extracted {len(entities)} entities, {len(relationships)} relationships")
         return {"entities": entities, "relationships": relationships}
 
-    # ─── Prompt builders ──────────────────────────────────────────────────────
-
     def _system_prompt(self) -> str:
-        return f"""You are a knowledge graph extraction specialist for scientific documents.
-
-Extract entities and relationships from the provided text.
-
-ENTITY TYPES (use exact strings): {", ".join(self.entity_types)}
-
-RELATIONSHIP TYPES (use exact strings): {", ".join(self.relationship_types)}
-
-Return a JSON object with this exact structure:
-{{
-  "entities": [
-    {{
-      "id": "unique_slug_no_spaces",
-      "label": "Human Readable Name",
-      "type": "EntityType",
-      "properties": {{"description": "brief description", "aliases": []}}
-    }}
-  ],
-  "relationships": [
-    {{
-      "source": "source_entity_id",
-      "target": "target_entity_id",
-      "type": "RELATIONSHIP_TYPE",
-      "properties": {{"context": "brief context for this relationship"}}
-    }}
-  ]
-}}
-
-Rules:
-- Entity IDs must be unique, lowercase, use underscores (e.g. "bert_model")
-- Only use entity/relationship types from the provided lists
-- Only extract what is explicitly stated — do not infer
-- Return valid JSON only, no markdown fences
-"""
+        return (
+            "You are a knowledge graph extraction specialist for scientific documents.\n\n"
+            f"ENTITY TYPES (use exact strings): {', '.join(self.entity_types)}\n\n"
+            f"RELATIONSHIP TYPES (use exact strings): {', '.join(self.relationship_types)}\n\n"
+            "Return a JSON object:\n"
+            '{"entities": [{"id": "slug", "label": "Name", "type": "EntityType", "properties": {}}], '
+            '"relationships": [{"source": "id", "target": "id", "type": "REL_TYPE", "properties": {}}]}\n\n'
+            "Rules:\n"
+            "- IDs: lowercase, underscores (e.g. bert_model)\n"
+            "- Only use listed types\n"
+            "- Only extract explicitly stated facts\n"
+            "- Return valid JSON only, no markdown"
+        )
 
     def _user_prompt(self, text: str, doc_id: str) -> str:
         ctx = f" (Document ID: {doc_id})" if doc_id else ""
-        return f"Extract entities and relationships from this document text{ctx}:\n\n{text[:4000]}"
+        return f"Extract entities and relationships{ctx}:\n\n{text[:4000]}"

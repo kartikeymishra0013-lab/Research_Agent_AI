@@ -51,12 +51,8 @@ neo4j:
 # ─── Document Loaders ─────────────────────────────────────────
 loaders:
   pdf:
-    # OCR fallback for scanned PDFs (triggers when words/page < threshold)
-    ocr_enabled: true
-    ocr_dpi: 300
-    ocr_language: eng
-    ocr_words_threshold: 10  # pages below this words/page trigger OCR
     extract_images: false
+    ocr_enabled: false
 
   docx:
     include_tables: true
@@ -69,56 +65,15 @@ loaders:
   web:
     timeout: 30
     use_trafilatura: true
-    user_agent: ScientificDocumentIntelligencePipeline/2.0
+    user_agent: ScientificDocumentIntelligencePipeline/1.0
 
 # ─── Text Chunking ────────────────────────────────────────────
 chunking:
-  # Strategy: sentence | paragraph | fixed | semantic
-  # Use "semantic" for best retrieval quality (requires embedding API calls)
+  # Strategy: sentence | paragraph | fixed
   strategy: sentence
   chunk_size: 1500
   chunk_overlap: 200
   min_chunk_size: 100
-
-  # SemanticChunker parameters (only used when strategy = "semantic")
-  similarity_threshold: 0.65   # cosine similarity below which a split is inserted
-  sentence_group_size: 3       # sentences per embedding window
-
-# ─── Parallel Processing ──────────────────────────────────────
-processing:
-  # Number of parallel workers for directory batch processing
-  max_workers: 4
-  # Re-process files already in the registry (override with --force CLI flag)
-  force_reprocess: false
-
-# ─── Processing Registry (deduplication) ─────────────────────
-registry:
-  # Path to the JSON file storing content-hash → processed status
-  path: data/output/registry.json
-
-# ─── OCR Settings ─────────────────────────────────────────────
-# (Also controllable per-loader under loaders.pdf above)
-ocr:
-  enabled: true
-  dpi: 300
-  language: eng
-  words_per_page_threshold: 10
-
-# ─── REST API ─────────────────────────────────────────────────
-api:
-  host: 0.0.0.0
-  port: 8080
-  # Number of Uvicorn worker processes (≥2 for production)
-  workers: 2
-  # CORS origins (comma-separated, or * for all)
-  cors_origins: "*"
-
-# ─── Cost Tracking ────────────────────────────────────────────
-cost_tracking:
-  # Log a warning when total pipeline cost exceeds this threshold (USD)
-  warn_threshold_usd: 1.0
-  # Include cost summary in each run result JSON
-  include_in_results: true
 
 # ─── Output ───────────────────────────────────────────────────
 output:
