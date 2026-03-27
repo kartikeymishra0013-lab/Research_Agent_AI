@@ -55,6 +55,12 @@ Q             ?=
 # Glob pattern for directory processing
 GLOB          ?= **/*
 
+# Force re-processing of already-indexed documents
+FORCE         ?= false
+
+# API port (default 8080)
+API_PORT      ?= 8080
+
 # ─── Colors ───────────────────────────────────────────────────
 CYAN    := \033[36m
 GREEN   := \033[32m
@@ -242,6 +248,40 @@ neo4j-browser: ## Print Neo4j browser URL
 chromadb-ui: ## Print ChromaDB API URL
 	@echo -e "$(CYAN)ChromaDB API: $(BOLD)http://localhost:8000$(RESET)"
 	@echo -e "Collections:  $(CYAN)http://localhost:8000/api/v1/collections$(RESET)"
+
+
+# ═══════════════════════════════════════════════════════════════
+# REST API
+# ═══════════════════════════════════════════════════════════════
+
+.PHONY: api
+api: _check-env ## Start the REST API server (FastAPI + Uvicorn) via Docker
+	@echo -e "$(BOLD)$(CYAN)Starting REST API server...$(RESET)"
+	$(DC) --profile api up -d chromadb neo4j
+	@$(MAKE) _wait-healthy
+	$(DC) --profile api up -d api
+	@echo -e "$(GREEN)✓  API server running$(RESET)"
+	@echo -e "   API:     $(CYAN)http://localhost:8080$(RESET)"
+	@echo -e "   Docs:    $(CYAN)http://localhost:8080/docs$(RESET)"
+	@echo -e "   Health:  $(CYAN)http://localhost:8080/health$(RESET)"
+
+.PHONY: api-local
+api-local: _check-local-env ## Start the REST API server locally (no Docker)
+	@echo -e "$(BOLD)$(CYAN)Starting API locally on http://0.0.0.0:8080$(RESET)"
+	PYTHONPATH=. uvicorn src.api.app:app \
+		--host 0.0.0.0 \
+		--port 8080 \
+		--reload \
+		--log-level $$(echo $(LOG_LEVEL) | tr '[:upper:]' '[:lower:]')
+
+.PHONY: api-logs
+api-logs: ## Tail the API service logs
+	$(DC) logs -f api
+
+.PHONY: api-down
+api-down: ## Stop the API server
+	$(DC) --profile api stop api
+	@echo -e "$(GREEN)✓  API server stopped$(RESET)"
 
 
 # ═══════════════════════════════════════════════════════════════
