@@ -1,0 +1,91 @@
+# ============================================================
+# Scientific Document Intelligence Pipeline — Configuration
+# ============================================================
+# All values support environment variable substitution: ${VAR_NAME}
+# Override any setting via CLI flags or environment variables.
+# ============================================================
+
+# ─── Pipeline Behavior ────────────────────────────────────────
+pipeline:
+  # Mode controls which pipeline stages are executed:
+  #   full         - extract + embed + graph + summarize (default)
+  #   extract_only - structured extraction and summaries only
+  #   search_only  - embedding and semantic search only
+  #   graph_only   - knowledge graph construction only
+  mode: full
+
+  # OpenAI model for the agent and all extraction tasks
+  model: gpt-4o
+
+  # Model temperature (0.0 = deterministic, 1.0 = creative)
+  temperature: 0.1
+
+  # Default schema for extraction (research_paper | patent | default)
+  schema_type: default
+
+  # Maximum agentic loop iterations per document
+  max_iterations: 20
+
+# ─── OpenAI ───────────────────────────────────────────────────
+openai:
+  api_key: ${OPENAI_API_KEY}
+  # Embedding model for ChromaDB vector storage
+  embedding_model: text-embedding-3-small
+
+# ─── ChromaDB Vector Store ────────────────────────────────────
+chromadb:
+  host: ${CHROMADB_HOST:-chromadb}
+  port: ${CHROMADB_PORT:-8000}
+  # Collection name for document chunks
+  collection: documents
+  # Similarity metric: cosine | l2 | ip
+  distance_metric: cosine
+
+# ─── Neo4j Knowledge Graph ────────────────────────────────────
+neo4j:
+  uri: ${NEO4J_URI:-bolt://neo4j:7687}
+  username: ${NEO4J_USERNAME:-neo4j}
+  password: ${NEO4J_PASSWORD:-password}
+  database: neo4j
+
+# ─── Document Loaders ─────────────────────────────────────────
+loaders:
+  pdf:
+    extract_images: false
+    ocr_enabled: false
+
+  docx:
+    include_tables: true
+    include_headers: true
+
+  text:
+    encoding: utf-8
+    strip_markdown: false
+
+  web:
+    timeout: 30
+    use_trafilatura: true
+    user_agent: ScientificDocumentIntelligencePipeline/1.0
+
+# ─── Text Chunking ────────────────────────────────────────────
+chunking:
+  # Strategy: sentence | paragraph | fixed
+  strategy: sentence
+  chunk_size: 1500
+  chunk_overlap: 200
+  min_chunk_size: 100
+
+# ─── Output ───────────────────────────────────────────────────
+output:
+  # Directory for all output files (JSON, JSONL, reports)
+  dir: data/output
+  # Always pretty-print JSON output files
+  pretty_print: true
+  # Append all extractions to a master JSONL dataset file
+  dataset_name: extractions
+
+# ─── Logging ──────────────────────────────────────────────────
+logging:
+  level: ${LOG_LEVEL:-INFO}
+  # Optional file path for persistent log output
+  file: null  # e.g. data/output/pipeline.log

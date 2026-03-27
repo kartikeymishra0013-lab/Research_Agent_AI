@@ -1,0 +1,90 @@
+{
+  "name": "research_paper",
+  "description": "Schema for academic research papers, preprints, and journal articles",
+  "fields": {
+    "title": {
+      "type": "string",
+      "description": "Full title of the paper"
+    },
+    "authors": {
+      "type": "array",
+      "description": "List of author names"
+    },
+    "affiliations": {
+      "type": "array",
+      "description": "Author institutional affiliations"
+    },
+    "abstract": {
+      "type": "string",
+      "description": "Full abstract text"
+    },
+    "keywords": {
+      "type": "array",
+      "description": "Author-provided or extracted keywords"
+    },
+    "publication_year": {
+      "type": "string",
+      "description": "Year of publication or submission"
+    },
+    "journal_or_venue": {
+      "type": "string",
+      "description": "Journal name, conference, or preprint server (e.g. arXiv)"
+    },
+    "doi": {
+      "type": "string",
+      "description": "Digital Object Identifier (DOI)"
+    },
+    "research_domain": {
+      "type": "string",
+      "description": "Primary research domain (e.g. NLP, Computer Vision, Genomics)"
+    },
+    "problem_statement": {
+      "type": "string",
+      "description": "The core problem or research question addressed"
+    },
+    "methodology": {
+      "type": "string",
+      "description": "Summary of methods, models, or experimental approach used"
+    },
+    "datasets_used": {
+      "type": "array",
+      "description": "Names of datasets used in experiments"
+    },
+    "baseline_models": {
+      "type": "array",
+      "description": "Baseline or comparison models referenced"
+    },
+    "proposed_model_or_method": {
+      "type": "string",
+      "description": "Name or description of the proposed approach"
+    },
+    "evaluation_metrics": {
+      "type": "array",
+      "description": "Metrics used to evaluate results (e.g. F1, BLEU, accuracy)"
+    },
+    "key_results": {
+      "type": "string",
+      "description": "Main quantitative or qualitative results reported"
+    },
+    "contributions": {
+      "type": "array",
+      "description": "Explicitly stated novel contributions"
+    },
+    "limitations": {
+      "type": "string",
+      "description": "Acknowledged limitations or future work"
+    },
+    "citations_count_estimate": {
+      "type": "string",
+      "description": "Estimated number of references cited"
+    },
+    "code_available": {
+      "type": "boolean",
+      "description": "Whether source code is mentioned as publicly available"
+    },
+    "code_url": {
+      "type": "string",
+      "description": "URL to code repository if mentioned"
+    }
+  }
+}

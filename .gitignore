@@ -1,0 +1,51 @@
+# Environment & secrets
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+.python-version
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+*.xml
+
+# Type checking
+.mypy_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Pipeline outputs (keep dir, ignore content)
+data/output/*
+!data/output/.gitkeep
+
+# Input documents (keep dir structure)
+data/input/*
+!data/input/.gitkeep
+
+# Docker
+.dockerignore
+
+# Logs
+*.log

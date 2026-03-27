@@ -1,0 +1,78 @@
+{
+  "name": "patent",
+  "description": "Schema for utility patents, design patents, and patent applications",
+  "fields": {
+    "patent_title": {
+      "type": "string",
+      "description": "Official title of the patent"
+    },
+    "patent_number": {
+      "type": "string",
+      "description": "Patent or application number (e.g. US10123456B2)"
+    },
+    "filing_date": {
+      "type": "string",
+      "description": "Date the patent application was filed"
+    },
+    "publication_date": {
+      "type": "string",
+      "description": "Date the patent was published or granted"
+    },
+    "inventors": {
+      "type": "array",
+      "description": "List of named inventors"
+    },
+    "assignee": {
+      "type": "string",
+      "description": "Organization or individual the patent is assigned to"
+    },
+    "patent_office": {
+      "type": "string",
+      "description": "Patent office (USPTO, EPO, WIPO, etc.)"
+    },
+    "ipc_classifications": {
+      "type": "array",
+      "description": "International Patent Classification (IPC) codes"
+    },
+    "cpc_classifications": {
+      "type": "array",
+      "description": "Cooperative Patent Classification (CPC) codes"
+    },
+    "abstract": {
+      "type": "string",
+      "description": "Patent abstract"
+    },
+    "problem_solved": {
+      "type": "string",
+      "description": "Technical problem or need the invention addresses"
+    },
+    "invention_summary": {
+      "type": "string",
+      "description": "Brief summary of what the invention is and how it works"
+    },
+    "key_claims": {
+      "type": "array",
+      "description": "Independent claims (what is legally protected)"
+    },
+    "technical_field": {
+      "type": "string",
+      "description": "Technical field of the invention"
+    },
+    "prior_art_references": {
+      "type": "array",
+      "description": "Key prior art patents or publications cited"
+    },
+    "embodiments": {
+      "type": "string",
+      "description": "Brief description of preferred embodiment(s)"
+    },
+    "commercial_applications": {
+      "type": "array",
+      "description": "Potential commercial or industrial applications"
+    },
+    "materials_or_components": {
+      "type": "array",
+      "description": "Key materials, chemicals, or components involved"
+    }
+  }
+}

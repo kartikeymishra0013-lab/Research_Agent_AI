@@ -1,0 +1,58 @@
+{
+  "name": "default",
+  "description": "General-purpose schema for any document type",
+  "fields": {
+    "title": {
+      "type": "string",
+      "description": "Document title or heading"
+    },
+    "document_type": {
+      "type": "string",
+      "description": "Type of document (report, article, manual, specification, etc.)"
+    },
+    "authors_or_creators": {
+      "type": "array",
+      "description": "Authors, creators, or responsible parties"
+    },
+    "date": {
+      "type": "string",
+      "description": "Publication, creation, or revision date"
+    },
+    "organization": {
+      "type": "string",
+      "description": "Publishing or authoring organization"
+    },
+    "abstract_or_summary": {
+      "type": "string",
+      "description": "Executive summary or abstract"
+    },
+    "main_topics": {
+      "type": "array",
+      "description": "Primary topics or themes covered"
+    },
+    "key_entities": {
+      "type": "array",
+      "description": "Key named entities (people, organizations, products, places)"
+    },
+    "keywords": {
+      "type": "array",
+      "description": "Keywords or tags"
+    },
+    "key_findings_or_points": {
+      "type": "string",
+      "description": "Most important findings, conclusions, or points"
+    },
+    "recommendations": {
+      "type": "array",
+      "description": "Explicit recommendations or action items"
+    },
+    "references": {
+      "type": "array",
+      "description": "Referenced documents, URLs, or sources"
+    },
+    "language": {
+      "type": "string",
+      "description": "Language the document is written in"
+    }
+  }
+}
