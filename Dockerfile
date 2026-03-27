@@ -26,7 +26,7 @@ FROM python:3.11-slim AS runtime
 
 LABEL maintainer="Scientific Document Intelligence Pipeline"
 LABEL description="AI-powered pipeline for converting unstructured documents into structured knowledge"
-LABEL version="1.0.0"
+LABEL version="2.0.0"
 
 # Install runtime system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -36,13 +36,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # For python-docx (Word documents)
     libxml2 \
     libxslt1.1 \
-    # Networking
+    # OCR: Tesseract + English language data
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    # OCR: pdf2image requires poppler utils (pdftoppm / pdftocairo)
+    poppler-utils \
+    # Networking & health checks
     curl \
     # Timezone support
     tzdata \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy installed packages from builder
+# Copy installed Python packages from builder
 COPY --from=builder /install /usr/local
 
 # Set working directory
@@ -69,7 +74,7 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV LOG_LEVEL=INFO
 
-# Health check
+# Health check (lightweight — just verifies imports)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD python -c "from src.pipeline.orchestrator import PipelineOrchestrator; print('OK')" || exit 1
 

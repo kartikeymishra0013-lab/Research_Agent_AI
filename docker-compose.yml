@@ -1,10 +1,11 @@
 # ============================================================
 # Scientific Document Intelligence Pipeline — Docker Compose
-# Services: pipeline | chromadb | neo4j
+# Services: pipeline | api | chromadb | neo4j
 # ============================================================
 # Usage:
 #   make up          → Start all services
 #   make run         → Run pipeline on data/input/
+#   make api         → Start the REST API server
 #   make down        → Stop all services
 # ============================================================
 
@@ -29,7 +30,7 @@ volumes:
 # ─── Services ─────────────────────────────────────────────────
 services:
 
-  # ── Main Pipeline Application ────────────────────────────────
+  # ── Main Pipeline Application (batch processing) ─────────────
   pipeline:
     build:
       context: .
@@ -58,15 +59,58 @@ services:
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     volumes:
-      # Mount local data directories for input/output persistence
       - ./data/input:/app/data/input
       - ./data/output:/app/data/output
-      # Mount config for runtime overrides without rebuild
       - ./config:/app/config:ro
     command: >
       python -m src.main run --dir data/input/
     profiles:
       - run
+
+  # ── REST API (FastAPI + Uvicorn) ──────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: sdip-pipeline:latest
+    container_name: sdip-api
+    restart: unless-stopped
+    networks:
+      - pipeline-net
+    depends_on:
+      chromadb:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - CHROMADB_HOST=chromadb
+      - CHROMADB_PORT=8000
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USERNAME=${NEO4J_USERNAME:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - ./data/input:/app/data/input
+      - ./data/output:/app/data/output
+      - ./config:/app/config:ro
+    ports:
+      - "${API_PORT:-8080}:8080"
+    command: >
+      uvicorn src.api.app:app --host 0.0.0.0 --port 8080 --workers 2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    profiles:
+      - api
 
   # ── Pipeline Interactive Shell ────────────────────────────────
   pipeline-shell:
@@ -96,7 +140,7 @@ services:
       - ./data/input:/app/data/input
       - ./data/output:/app/data/output
       - ./config:/app/config:ro
-      # Mount source for live development (comment out in production)
+      # Mount source for live development
       - ./src:/app/src
     stdin_open: true
     tty: true
@@ -147,8 +191,6 @@ services:
       - NEO4J_dbms_memory_heap_initial__size=512m
       - NEO4J_dbms_memory_heap_max__size=2G
       - NEO4J_dbms_memory_pagecache_size=512m
-      # Disable authentication for local dev (optional — comment out for security)
-      # - NEO4J_AUTH=none
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
       interval: 15s
